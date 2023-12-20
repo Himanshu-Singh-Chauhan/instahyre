@@ -1,15 +1,49 @@
 const express = require("express");
+const bcrypt = require('bcrypt');
 const bodyParser = require("body-parser");
 const User = require("./models/user.js");
 const SpamNumber = require("./models/spamNumber.js");
 const Contact = require("./models/contact.js");
 
+const jwt = require('jsonwebtoken');
+const secretKey = 'himanshu123';
+
 const app = express();
 app.use(bodyParser.json());
+const saltRounds = 10; // Number of salt rounds for bcrypt
+
 
 app.get("/", (req, res) => {
-  res.send("Hello, Himanshu! This is your Express API.");
+  res.send("Hello, This is Instahyre coding task");
 });
+
+
+function verifyToken(req, res, next) {
+  const rawtoken = req.headers.authorization;
+
+  if (!rawtoken) {
+    return res.status(401).json({ error: 'Unauthorized: Token missing' });
+  }
+
+  console.log('Decoded user:', rawtoken);
+  const [bearer, token] = rawtoken.split(' ');
+
+  if (bearer !== 'Bearer' || !token) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid authorization format' });
+  }
+
+
+  jwt.verify(token, secretKey, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Unauthorized: Invalid token' });
+    }
+
+    req.user = user; // Attach the user object to the request
+    next();
+  });
+}
+
+
 
 // Register endpoint
 app.post("/register", async (req, res) => {
@@ -25,22 +59,45 @@ app.post("/register", async (req, res) => {
         .json({ error: "User with this phone number already registered" });
     }
 
+    const hashedPassword = await bcrypt.hash(Password, saltRounds);
+
     const newUser = await User.query().insertAndFetch({
       Name,
       PhoneNumber,
       EmailAddress,
-      Password,
+      Password: hashedPassword,
     });
 
-    res.status(201).json(newUser);
+     const token = jwt.sign({ userId: newUser.id, username: newUser.Name }, secretKey, { expiresIn: '1h' });
+
+    delete newUser.Password
+    res.status(201).json({ user: newUser, token });
   } catch (error) {
     console.error("Error registering user:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
+
+
+// Sign-in route
+app.post("/signin", (req, res) => {
+  const { username, password } = req.body;
+
+  const user = users.find(u => u.username === username);
+
+  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const token = jwt.sign({ userId: user.id, username: user.username }, secretKey, { expiresIn: '1h' });
+
+  res.json({ token });
+});
+
+
 // Mark number as spam endpoint
-app.post("/markspam", async (req, res) => {
+app.post("/markspam", verifyToken, async (req, res) => {
   try {
     const { PhoneNumber, ReporterUserID } = req.body;
 
@@ -68,7 +125,7 @@ app.post("/markspam", async (req, res) => {
 });
 
 // Search endpoint
-app.get("/search", async (req, res) => {
+app.get("/search", verifyToken,  async (req, res) => {
   try {
     const { query } = req.query;
 
@@ -122,12 +179,10 @@ app.get("/search", async (req, res) => {
       allResults.map(async (result) => {
         const { PhoneNumber } = result;
 
-        // Check if the phone number is in the SpamNumbers table
         const spamEntry = await SpamNumber.query()
           .where({ PhoneNumber })
           .first();
 
-        // If the number is in spam, update the SpamCount
         if (spamEntry) {
           if (!result.spam_likelihood) result.spam_likelihood = 0;
           result.spam_likelihood += 1;
@@ -150,7 +205,7 @@ app.get("/search", async (req, res) => {
 });
 
 // Phone number search endpoint
-app.get("/searchbyphone", async (req, res) => {
+app.get("/searchbyphone", verifyToken,  async (req, res) => {
   try {
     const { phoneNumber } = req.query;
 
@@ -198,8 +253,6 @@ app.get("/searchbyphone", async (req, res) => {
       })
     );
 
-    console.log(allResults.length);
-
 
     if (allResults.length === 0) {
       const spamEntries = await SpamNumber.query().where({
@@ -223,9 +276,10 @@ app.get("/searchbyphone", async (req, res) => {
   }
 });
 
-const port = 3000; // You can use any port you prefer
+
 
 // Start the server
+const port = 3000; 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
